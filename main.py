@@ -34,19 +34,21 @@ class QuestionRequest(BaseModel):
     email: str
     question: str
 
+class Savings(BaseModel):
+    savings_name: str
+    category: str
+    amount: float
+    date_created: date
+
 class FinancialGoal(BaseModel):
-    category: str  # Long term, Midterm, Short term
+    category: str
     goal_name: str
     goal_description: str
     target_amount: float
     deadline: date
 
-class Savings(BaseModel):
-    savings_name: str
-    category: str  # Education, Emergency Fund, Retirement Fund
-
 class Expenditure(BaseModel):
-    category: str  # Housing, Bills, Grocery, Debt, etc.
+    category: str
     amount: float
     date: date
 
@@ -118,7 +120,9 @@ class Neo4jDatabase:
             CREATE (s:Saving {
                 id: randomUUID(),
                 name: saving.savings_name,
-                category: saving.category
+                category: saving.category,
+                amount: saving.amount,
+                date_created: saving.date_created
             })
             CREATE (u)-[:HAS_SAVING]->(s)
         )
@@ -133,11 +137,18 @@ class Neo4jDatabase:
             CREATE (u)-[:HAS_EXPENSE]->(e)
         )
         
-        RETURN u
+        WITH u
+        OPTIONAL MATCH (u)-[:HAS_GOAL]->(g:Goal)
+        OPTIONAL MATCH (u)-[:HAS_SAVING]->(s:Saving)
+        OPTIONAL MATCH (u)-[:HAS_EXPENSE]->(e:Expense)
+        RETURN u, 
+            COLLECT(DISTINCT g) AS goals, 
+            COLLECT(DISTINCT s) AS savings,
+            COLLECT(DISTINCT e) AS expenses
         """
         with self.driver.session() as session:
             result = session.run(query, id=str(uuid4()), **user_data)
-            return result.single()["u"]
+            return result.single()
 
     def get_user_by_email(self, email):
         query = """
@@ -253,15 +264,22 @@ async def register_user(user: UserCreate):
             for goal in user_data["goals"]:
                 goal["deadline"] = goal["deadline"].isoformat()
         
+        if user.savings:
+            for saving in user_data["savings"]:
+                saving["date_created"] = saving["date_created"].isoformat()
+        
         if user.expenditures:
             for expense in user_data["expenditures"]:
                 expense["date"] = expense["date"].isoformat()
         
         created_user = db.create_user(user_data)
+        if not created_user:
+            raise HTTPException(status_code=400, detail="Failed to create user")
+            
         return format_user_response(created_user)
         
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/users/{email}", response_model=UserResponse)
 async def get_user(email: str):
@@ -306,7 +324,9 @@ def format_goal(goal):
 def format_saving(saving):
     return {
         "savings_name": saving["name"],
-        "category": saving["category"]
+        "category": saving["category"],
+        "amount": saving["amount"],
+        "date_created": date.fromisoformat(saving["date_created"])
     }
 
 def format_expense(expense):
